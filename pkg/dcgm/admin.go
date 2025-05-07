@@ -57,18 +57,23 @@ var (
 )
 
 func initDCGM(m mode, args ...string) (err error) {
-	const (
-		dcgmLib = "libdcgm.so.4"
-	)
-	lib := C.CString(dcgmLib)
-	defer freeCString(lib)
+	dcgmLibs := []string{"libdcgm.so.4", "libdcgm.so.3"}
+	var libHandle unsafe.Pointer
 
-	dcgmLibHandle = C.dlopen(lib, C.RTLD_LAZY|C.RTLD_GLOBAL)
-	if dcgmLibHandle == nil {
-		return fmt.Errorf("%s not found", dcgmLib)
+	for _, libName := range dcgmLibs {
+		cLibName := C.CString(libName)
+		defer C.free(unsafe.Pointer(cLibName))
+		libHandle = C.dlopen(cLibName, C.RTLD_LAZY|C.RTLD_GLOBAL)
+		if libHandle != nil {
+			break
+		}
 	}
 
-	// set the stopMode for shutdown()
+	if libHandle == nil {
+		return fmt.Errorf("DCGM library not found. Tried: %v", dcgmLibs)
+	}
+
+	dcgmLibHandle = libHandle
 	stopMode = m
 
 	switch m {
@@ -79,7 +84,7 @@ func initDCGM(m mode, args ...string) (err error) {
 	case StartHostengine:
 		return startHostengine()
 	default:
-		panic(ErrInvalidMode)
+		return fmt.Errorf("invalid mode")
 	}
 }
 
