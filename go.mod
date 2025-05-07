@@ -1,4 +1,4 @@
-module github.com/NVIDIA/go-dcgm
+module github.com/NGLyu/go-dcgm
 
 go 1.23
 
