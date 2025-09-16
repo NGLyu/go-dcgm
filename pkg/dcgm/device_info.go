@@ -45,6 +45,12 @@ type Device struct {
 	CPUAffinity   string
 }
 
+// NvLinkP2PStatus represents the state of NvLinks between the GPU pairs
+type NvLinkP2PStatus struct {
+	numGpus uint
+	Gpus    [][]Link_State
+}
+
 // getAllDeviceCount counts all GPUs on the system
 func getAllDeviceCount() (gpuCount uint, err error) {
 	var (
@@ -282,4 +288,34 @@ func getDeviceInfo(gpuID uint) (deviceInfo Device, err error) {
 		CPUAffinity:   cpuAffinity,
 	}
 	return
+}
+
+func getNvLinkP2PStatus() (NvLinkP2PStatus, error) {
+	var linkStatus C.dcgmNvLinkP2PStatus_v1
+	linkStatus.version = makeVersion1(unsafe.Sizeof(linkStatus))
+
+	result := C.dcgmGetNvLinkP2PStatus(handle.handle, &linkStatus)
+	if result == C.DCGM_ST_NOT_SUPPORTED {
+		return NvLinkP2PStatus{}, nil
+	}
+
+	if result != C.DCGM_ST_OK {
+		return NvLinkP2PStatus{}, &Error{msg: C.GoString(C.errorString(result)), Code: result}
+	}
+
+	links := make([][]Link_State, linkStatus.numGpus)
+	for i := range links {
+		links[i] = make([]Link_State, linkStatus.numGpus)
+	}
+
+	for i := uint(0); i < uint(linkStatus.numGpus); i++ {
+		for j := 0; j < int(linkStatus.numGpus); j++ {
+			links[i][j] = Link_State(linkStatus.gpus[i].linkStatus[j])
+		}
+	}
+
+	return NvLinkP2PStatus{
+		numGpus: uint(linkStatus.numGpus),
+		Gpus:    links,
+	}, nil
 }

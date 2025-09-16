@@ -30,6 +30,8 @@
 #include <nvml_injection.h>
 #endif
 
+#include <stddef.h>
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -440,6 +442,11 @@ typedef dcgmRunDiag_v10 dcgmRunDiag_t;
 #define dcgmRunDiag_version dcgmRunDiag_version10
 
 /**
+ * Latest version for \ref dcgmRunDiag_t
+ */
+#define dcgmRunMnDiag_version dcgmRunMnDiag_version1
+
+/**
  * Version 1 of dcgmCreateGroup_t
  */
 
@@ -815,6 +822,12 @@ typedef struct
 
 typedef struct
 {
+    dcgmNvLinkP2PStatus_v1 ls; //!< IN/OUT: nvlink status populated on success
+    unsigned int cmdRet;       //!< OUT: Error code generated
+} dcgmGetNvLinkP2PStatus_v1;
+
+typedef struct
+{
     dcgmCreateFakeEntities_v2 fe; //!< IN/OUT: fake entity info, populated on success
     unsigned int cmdRet;          //!< OUT: Error code generated
 } dcgmMsgCreateFakeEntities_v1;
@@ -848,6 +861,44 @@ typedef struct
     dcgmAllFieldGroup_t fg; //!< IN/OUT: hostengine health
     unsigned int cmdRet;    //!< OUT: Error code generated
 } dcgmGetAllFieldGroup_v1;
+
+typedef struct
+{
+    unsigned int gpuId;          //!< IN: GPU ID to get chip architecture for
+    dcgmChipArchitecture_t data; //!< OUT: populated on success
+    unsigned int cmdRet;         //!< OUT: Error code generated
+} dcgmMsgGetGpuChipArchitecture_v1;
+
+typedef struct
+{
+    unsigned int version;   //!< IN: Version number. Use dcgmChildProcessParams_version
+    char const *executable; //!< IN: Path to the executable to run
+    char const **args;      //!< IN: Optional: Array of arguments to pass to the executable
+    size_t numArgs;         //!< IN: Number of arguments
+    char const **env;       //!< IN: Optional: Array of "KEY=VALUE" environment variables to set for the executable
+    size_t numEnv;          //!< IN: Number of environment variables
+    char const *userName;   //!< IN: Optional: User name to run the executable as
+    int dataChannelFd;      //!< IN: Optional: File descriptor for the data channel, use values > 2 if needed
+} dcgmChildProcessParams_v1;
+
+#define dcgmChildProcessParams_version1 MAKE_DCGM_VERSION(dcgmChildProcessParams_v1, 1)
+#define dcgmChildProcessParams_version  dcgmChildProcessParams_version1
+typedef dcgmChildProcessParams_v1 dcgmChildProcessParams_t;
+
+typedef struct
+{
+    unsigned int version;        //!< IN: Version number. Use dcgmChildProcessStatus_version
+    unsigned int running;        //!< OUT: Whether the child process is running - 0 = not running, 1 = running
+    int exitCode;                //!< OUT: Exit code of the child process
+    unsigned int receivedSignal; //!< OUT: Whether the child process received a signal - 0 = no, 1 = yes
+    int receivedSignalNumber;    //!< OUT: Number of the signal received by the child process
+} dcgmChildProcessStatus_v1;
+
+#define dcgmChildProcessStatus_version1 MAKE_DCGM_VERSION(dcgmChildProcessStatus_v1, 1)
+#define dcgmChildProcessStatus_version  dcgmChildProcessStatus_version1
+typedef dcgmChildProcessStatus_v1 dcgmChildProcessStatus_t;
+
+typedef uintptr_t ChildProcessHandle_t;
 
 typedef struct
 {
@@ -905,6 +956,121 @@ typedef struct
 
 #endif
 
+/***************************************************************************************************/
+/** @defgroup PRMTLV PRM TLV Structures
+ * These structures are implementation details for TLV (Type-Length-Value) protocol communication.
+ *
+ * WARNING: These structures may be deleted in a future release.
+ *  @{
+ */
+/***************************************************************************************************/
+
+/*
+ * TLV (Type-Length-Value) Protocol Constants and Enums
+ */
+
+/* TLV status codes */
+enum
+{
+    OP_TLV_STATUS_OK                     = 0x0,
+    OP_TLV_STATUS_BUSY                   = 0x1,
+    OP_TLV_STATUS_BAD_TLV                = 0x3,
+    OP_TLV_STATUS_NOT_SUPP_REG           = 0x4,
+    OP_TLV_STATUS_NOT_SUPP_CLASS         = 0x5,
+    OP_TLV_STATUS_NOT_SUPP_METHOD        = 0x6,
+    OP_TLV_STATUS_BAD_PARAM              = 0x7,
+    OP_TLV_STATUS_RESOURCE_NOT_AVAILABLE = 0x8,
+    OP_TLV_STATUS_LONG_PROCESS           = 0x9,
+    OP_TLV_STATUS_INTERNAL_ERR           = 0x70,
+};
+
+/* TLV types */
+#define TLV_TYPE_END 0x0
+#define TLV_TYPE_OP  0x1
+#define TLV_TYPE_REG 0x3
+
+/* Operation TLV constants */
+#define OP_TLV_LEN_DWORDS   0x4
+#define OP_TLV_CLASS_REG    0x1
+#define OP_TLV_METHOD_QUERY 0x1
+#define OP_TLV_METHOD_WRITE 0x2
+#define OP_TLV_METHOD_EVENT 0x5
+#define OP_TLV_REQUEST      0
+#define OP_TLV_RESPONSE     1
+
+/* Register TLV constants */
+#define REG_TLV_HEADER_LEN_DWORDS 0x1
+
+/* End TLV constants */
+#define END_TLV_LEN_DWORDS 0x1
+
+/*
+ * TLV Structure Definitions
+ */
+
+/**
+ * Base TLV structure - all TLV packets start with this header
+ * Contains type and length information for TLV parsing
+ */
+typedef struct TLVBase_s
+{
+    union
+    {
+        struct
+        {
+            uint32_t reserved : 16; //!< Reserved field (contains status in responses)
+            uint32_t length   : 11; //!< Length of TLV in DWORDs
+            uint32_t type     : 5;  //!< TLV type (OP=1, REG=3, END=0)
+        } fields;
+        uint32_t header; //!< Raw header value
+    } u;
+} TLVBase;
+
+/**
+ * Operation TLV structure - defines register access operations
+ * Specifies the register to access, operation method, and transaction ID
+ */
+typedef struct OpTLV_s
+{
+    TLVBase base; //!< Named base TLV header
+    union
+    {
+        struct
+        {
+            uint32_t emadClass  : 4;  //!< EMAD class (1=Register)
+            uint32_t trapIndex  : 3;  //!< Trap index
+            uint32_t reserved2  : 1;  //!< Reserved
+            uint32_t method     : 7;  //!< Method (1=Query, 2=Write, 5=Event)
+            uint32_t r          : 1;  //!< Request/Response (0=Request, 1=Response)
+            uint32_t registerID : 16; //!< Register ID (e.g., 0x5008 for PPCNT)
+        } fields;
+        uint32_t m_methodAndRegID; //!< Raw method and register ID value
+    } u;
+    uint32_t m_tidHigh; //!< Transaction ID (upper 32 bits)
+    uint32_t m_tidLow;  //!< Transaction ID (lower 32 bits)
+} OpTLV;
+
+/**
+ * Register TLV structure - contains register data payload
+ * Follows the OpTLV and contains the actual register data
+ */
+typedef struct RegTLV_s
+{
+    TLVBase base; //!< Named base TLV header
+    /* Register data follows immediately after this header */
+} RegTLV;
+
+/**
+ * End TLV structure - optional TLV termination marker
+ * Used to mark the end of a TLV packet sequence
+ */
+typedef struct EndTLV_s
+{
+    TLVBase base; //!< Named base TLV header
+} EndTLV;
+
+/** @} */
+
 /**
  * Verify that DCGM definitions that are copies of NVML ones match up with their NVML counterparts
  */
@@ -958,13 +1124,15 @@ DCGM_CASSERT(dcgmDiagResponse_version8 == (long)0x80d9690, 8);
 DCGM_CASSERT(dcgmDiagResponse_version9 == (long)0x914f4dc, 9);
 DCGM_CASSERT(dcgmDiagResponse_version10 == (long)0xa155abc, 10);
 DCGM_CASSERT(dcgmDiagResponse_version11 == (long)0xb155abc, 11);
-DCGM_CASSERT(dcgmDiagResponse_version == (long)0xb155abc, 11);
+DCGM_CASSERT(dcgmDiagResponse_version12 == (long)0xc155abc, 12);
+DCGM_CASSERT(dcgmDiagResponse_version == (long)0xc155abc, 12);
 DCGM_CASSERT(dcgmDiagTestAuxData_version1 == (long)0x1000804, 10);
 DCGM_CASSERT(dcgmDiagTestAuxData_version == (long)0x1000804, 10);
 DCGM_CASSERT(dcgmRunDiag_version7 == (long)0x70054D0, 1);
 DCGM_CASSERT(dcgmRunDiag_version8 == (long)0x801C818, 1);
 DCGM_CASSERT(dcgmRunDiag_version9 == (long)0x901CFE8, 1);
 DCGM_CASSERT(dcgmRunDiag_version10 == (long)0xA01D1E8, 1);
+DCGM_CASSERT(dcgmRunMnDiag_version1 == (long)0x101E32C, 1);
 DCGM_CASSERT(dcgmVgpuDeviceAttributes_version6 == (long)16787744, 1);
 DCGM_CASSERT(dcgmVgpuDeviceAttributes_version7 == (long)117451168, 1);
 DCGM_CASSERT(dcgmVgpuDeviceAttributes_version == (long)117451168, 1);
@@ -977,10 +1145,34 @@ DCGM_CASSERT(dcgmSettingsSetLoggingSeverity_version2 == (long)0x0200000c, 2);
 DCGM_CASSERT(dcgmVersionInfo_version == (long)0x2000204, 1);
 DCGM_CASSERT(dcgmStartEmbeddedV2Params_version1 == (long)0x01000048, 1);
 DCGM_CASSERT(dcgmStartEmbeddedV2Params_version2 == (long)0x02000050, 2);
+DCGM_CASSERT(dcgmStartEmbeddedV2Params_version3 == (long)0x03000068, 3);
 DCGM_CASSERT(dcgmInjectFieldValue_version1 == (long)0x1001018, 1);
 DCGM_CASSERT(dcgmInjectFieldValue_version == (long)0x1001018, 1);
 DCGM_CASSERT(dcgmNvLinkStatus_version4 == (long)0x40039BC, 4);
+DCGM_CASSERT(dcgmNvLinkP2PStatus_version1 == (long)0x1001088, 1);
 DCGM_CASSERT(dcgmDiagStatus_version1 == (long)0x1000090, 1);
+DCGM_CASSERT(dcgmHostengineHealth_version1 == (long)0x1000008, 1);
+DCGM_CASSERT(dcgmGroupInfo_version2 == (long)0x2000308, 2);
+DCGM_CASSERT(dcgmGroupInfo_version3 == (long)0x3002108, 3);
+DCGM_CASSERT(dcgmDeviceMigAttributesInfo_version1 == (long)0x1000038, 1);
+DCGM_CASSERT(dcgmDeviceMigAttributes_version1 == (long)0x1000040, 1);
+DCGM_CASSERT(dcgmGpuInstanceProfileInfo_version1 == (long)0x1000038, 1);
+DCGM_CASSERT(dcgmGpuInstanceProfiles_version1 == (long)0x1000040, 1);
+DCGM_CASSERT(dcgmComputeInstanceProfileInfo_version1 == (long)0x100002C, 1);
+DCGM_CASSERT(dcgmComputeInstanceProfiles_version1 == (long)0x1000034, 1);
+DCGM_CASSERT(dcgmRunningProcess_version1 == (long)0x1000010, 1);
+DCGM_CASSERT(dcgmMnDiagHosts_version1 == (long)0x1000250, 1);
+DCGM_CASSERT(dcgmMnDiagTestAuxData_version1 == (long)0x1000804, 1);
+DCGM_CASSERT(dcgmMnDiagTestRun_version1 == (long)0x10011F4, 1);
+DCGM_CASSERT(dcgmMnDiagEntity_version1 == (long)0x1000114, 1);
+DCGM_CASSERT(dcgmMnDiagError_version1 == (long)0x100021C, 1);
+DCGM_CASSERT(dcgmMnDiagInfo_version1 == (long)0x1000210, 1);
+DCGM_CASSERT(dcgmMnDiagEntityResult_version1 == (long)0x1000014, 1);
+DCGM_CASSERT(dcgmMnDiagResponse_version1 == (long)0x1087BE0, 1);
+DCGM_CASSERT(dcgmChildProcessParams_version1 == (long)0x01000040, 1);
+DCGM_CASSERT(dcgmChildProcessStatus_version1 == (long)0x01000014, 1);
+DCGM_CASSERT(dcgmLink_version1 == (long)0x01000004, 1);
+DCGM_CASSERT(dcgmWorkloadPowerProfile_version == (long)0x01000038, 1);
 
 #ifndef DCGM_ARRAY_CAPACITY
 #ifdef __cplusplus
